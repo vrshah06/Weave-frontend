@@ -10,6 +10,7 @@ import {
   Clock,
   UserCheck
 } from "lucide-react";
+import { importCsv } from "../api";
 
 export default function Dashboard({ state, onStart, onStop, onModeChange }) {
   const [uploading, setUploading] = useState(false);
@@ -29,22 +30,14 @@ export default function Dashboard({ state, onStart, onStop, onModeChange }) {
     formData.append("file", file);
 
     try {
-      const res = await fetch("/api/imports", {
-        method: "POST",
-        body: formData
+      const data = await importCsv(file);
+      setImportSummary({
+        imported: (data.counts?.created || 0) + (data.counts?.updated || 0) + (data.counts?.reactivated || 0),
+        duplicates: (data.counts?.unchanged || 0),
+        invalid: (data.counts?.invalid || 0),
       });
-      const data = await res.json();
-      if (res.ok) {
-        setImportSummary({
-          imported: (data.counts?.created || 0) + (data.counts?.updated || 0) + (data.counts?.reactivated || 0),
-          duplicates: (data.counts?.unchanged || 0),
-          invalid: (data.counts?.invalid || 0),
-        });
-      } else {
-        setError(data.detail || data.error || "Import failed");
-      }
     } catch (err) {
-      setError("Network error uploading CSV");
+      setError(err.body?.detail || err.body?.error || err.message || "Network error uploading CSV");
     } finally {
       setUploading(false);
     }
