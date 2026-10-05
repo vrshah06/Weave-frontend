@@ -17,7 +17,7 @@ async function request(path, options = {}) {
   });
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
-    const err = new Error(body.detail || body.message || `API ${res.status}`);
+    const err = new Error(body.error?.message || body.detail || body.message || `API ${res.status}`);
     err.status = res.status;
     err.body = body;
     throw err;
