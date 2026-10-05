@@ -2,7 +2,7 @@
   "rewrites": [
     {
       "source": "/api/:path*",
-      "destination": "https://weave-backend-7nk5.onrender.com/api/v1/:path*"
+      "destination": "https://weave-backend-xu5u.onrender.com/api/v1/:path*"
     },
     {
       "source": "/(.*)",
