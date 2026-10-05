@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { CheckCircle2, ShieldCheck, Clock, RefreshCw, AlertTriangle, FileCheck, Check } from "lucide-react";
+import { getLatestRun, getRunItems, markSent } from "../api";
 
 export default function Confirmations() {
   const [runData, setRunData] = useState(null);
@@ -11,14 +12,16 @@ export default function Confirmations() {
   const fetchLastRunConfirmations = async () => {
     try {
       setLoading(true);
-      const res = await fetch("/api/automation/confirmations/last");
-      const data = await res.json();
-      if (res.ok) {
-        setRunData(data.run);
-        setItems(data.items || []);
+      const run = await getLatestRun();
+      setRunData(run);
+      if (run && run.id) {
+        const runItems = await getRunItems(run.id);
+        setItems(runItems || []);
       }
     } catch (err) {
-      console.error("Error fetching confirmations:", err);
+      if (err.status !== 404) {
+        console.error("Error fetching confirmations:", err);
+      }
     } finally {
       setLoading(false);
     }
@@ -32,29 +35,33 @@ export default function Confirmations() {
     setVerifying(true);
     setNotification(null);
     try {
-      const res = await fetch("/api/automation/confirmations/verify", {
-        method: "POST"
-      });
-      const data = await res.json();
-      if (res.ok) {
-        setNotification({
-          type: "success",
-          text: data.message || `Successfully verified ${data.confirmedCount} confirmation(s).`
-        });
-        await fetchLastRunConfirmations();
-      } else {
-        setNotification({ type: "error", text: data.error || "Failed to verify confirmations." });
+      // Find all items that are NEEDS_REVIEW or SENT
+      const reviewableIds = items
+        .filter((i) => ["NEEDS_REVIEW", "SENT", "IN_PROGRESS"].includes(i.status))
+        .map((i) => i.appointmentId);
+      
+      if (reviewableIds.length === 0) {
+        setNotification({ type: "success", text: "No pending appointments to verify." });
+        setVerifying(false);
+        return;
       }
+
+      const res = await markSent(reviewableIds);
+      setNotification({
+        type: "success",
+        text: `Successfully verified and marked ${res.updated} appointment(s) as SENT/CONFIRMED.`
+      });
+      await fetchLastRunConfirmations();
     } catch (err) {
-      setNotification({ type: "error", text: "Network error triggering verification." });
+      setNotification({ type: "error", text: err.message || "Network error triggering verification." });
     } finally {
       setVerifying(false);
     }
   };
 
   const totalCount = items.length;
-  const confirmedCount = items.filter((i) => i.status === "CONFIRMED").length;
-  const pendingCount = items.filter((i) => i.status === "SENT" || i.status === "PENDING").length;
+  const confirmedCount = items.filter((i) => i.status === "SENT").length;
+  const pendingCount = items.filter((i) => i.status === "IN_PROGRESS" || i.status === "NEEDS_REVIEW").length;
   const failedCount = items.filter((i) => i.status === "FAILED").length;
   const confirmationRate = totalCount > 0 ? Math.round((confirmedCount / totalCount) * 100) : 0;
 
@@ -68,7 +75,7 @@ export default function Confirmations() {
           </div>
           <div>
             <h2 className="text-lg font-bold text-slate-900">Message Confirmations (Last Run)</h2>
-            <p className="text-xs text-slate-500">Automated Playwright status verification and MongoDB sync</p>
+            <p className="text-xs text-slate-500">Automated status verification and MongoDB sync</p>
           </div>
         </div>
 
@@ -96,7 +103,7 @@ export default function Confirmations() {
             <CheckCircle2 className="h-4 w-4 text-emerald-600 shrink-0" />
             <span>{notification.text}</span>
           </div>
-          <button onClick={() => setNotification(null)} className="font-bold">Dismiss</button>
+          <button type="button" onClick={() => setNotification(null)} className="font-bold">Dismiss</button>
         </div>
       )}
 
@@ -113,7 +120,7 @@ export default function Confirmations() {
         </div>
 
         <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm">
-          <span className="text-xs font-semibold text-slate-500 uppercase">Pending Verification</span>
+          <span className="text-xs font-semibold text-slate-500 uppercase">Pending Review</span>
           <p className="text-2xl font-extrabold text-amber-600 mt-1">{pendingCount}</p>
         </div>
 
@@ -129,13 +136,13 @@ export default function Confirmations() {
           <div className="flex items-center gap-4">
             <span className="font-bold text-slate-800">Last Execution Run:</span>
             <span className="font-mono bg-white px-2.5 py-1 rounded border border-slate-200">
-              {new Date(runData.startedAt).toLocaleString()}
+              {new Date(runData.queuedAt).toLocaleString()}
             </span>
             <span className="uppercase font-bold text-blue-600 bg-blue-50 px-2 py-0.5 rounded border border-blue-200">
               {runData.mode}
             </span>
           </div>
-          <span className="font-mono text-slate-400 text-[11px]">Run ID: {runData._id}</span>
+          <span className="font-mono text-slate-400 text-[11px]">Run ID: {runData.id}</span>
         </div>
       )}
 
@@ -146,51 +153,49 @@ export default function Confirmations() {
             <thead className="bg-slate-50 text-slate-600 border-b border-slate-200 uppercase tracking-wider font-semibold">
               <tr>
                 <th className="py-3 px-4">Patient Name</th>
-                <th className="py-3 px-4">Phone Number</th>
-                <th className="py-3 px-4">Appointment Date & Time</th>
-                <th className="py-3 px-4">Sent Time</th>
-                <th className="py-3 px-4">Confirmed Time</th>
-                <th className="py-3 px-4">Confirmation Status</th>
+                <th className="py-3 px-4">Appointment Time</th>
+                <th className="py-3 px-4">Attempt Started</th>
+                <th className="py-3 px-4">Attempt Finished</th>
+                <th className="py-3 px-4">Status</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-200">
               {loading ? (
                 <tr>
-                  <td colSpan={6} className="py-8 text-center text-slate-500">
+                  <td colSpan={5} className="py-8 text-center text-slate-500">
                     Loading confirmation log from MongoDB...
                   </td>
                 </tr>
               ) : items.length === 0 ? (
                 <tr>
-                  <td colSpan={6} className="py-8 text-center text-slate-500">
+                  <td colSpan={5} className="py-8 text-center text-slate-500">
                     No confirmation records found for the latest run. Click "Start Reminders" on the Dashboard to execute a run.
                   </td>
                 </tr>
               ) : (
                 items.map((item) => (
-                  <tr key={item._id} className="hover:bg-slate-50 transition-colors">
+                  <tr key={item.id} className="hover:bg-slate-50 transition-colors">
                     <td className="py-3 px-4 font-bold text-slate-900">{item.patientName}</td>
-                    <td className="py-3 px-4 font-mono text-slate-700">{item.phone}</td>
                     <td className="py-3 px-4 font-mono text-slate-600">
-                      {item.appointmentDate} {item.appointmentTime && `at ${item.appointmentTime}`}
+                      {item.appointmentTime}
                     </td>
                     <td className="py-3 px-4 font-mono text-slate-500">
-                      {item.sentAt ? new Date(item.sentAt).toLocaleTimeString() : "-"}
+                      {item.startedAt ? new Date(item.startedAt).toLocaleTimeString() : "-"}
                     </td>
                     <td className="py-3 px-4 font-mono text-emerald-700 font-semibold">
-                      {item.confirmedAt ? new Date(item.confirmedAt).toLocaleTimeString() : "Pending"}
+                      {item.finishedAt ? new Date(item.finishedAt).toLocaleTimeString() : "Pending"}
                     </td>
                     <td className="py-3 px-4">
                       <span
                         className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-bold ${
-                          item.status === "CONFIRMED"
+                          ["SENT", "DRY_RUN_VERIFIED"].includes(item.status)
                             ? "bg-emerald-50 text-emerald-700 border border-emerald-200"
                             : item.status === "FAILED"
                             ? "bg-rose-50 text-rose-700 border border-rose-200"
                             : "bg-amber-50 text-amber-700 border border-amber-200"
                         }`}
                       >
-                        {item.status === "CONFIRMED" && <Check className="h-3 w-3 text-emerald-600" />}
+                        {["SENT", "DRY_RUN_VERIFIED"].includes(item.status) && <Check className="h-3 w-3 text-emerald-600" />}
                         {item.status}
                       </span>
                     </td>

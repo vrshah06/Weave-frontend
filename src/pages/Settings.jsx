@@ -1,9 +1,10 @@
 import React, { useState, useEffect } from "react";
 import { Settings as SettingsIcon, Save, CheckCircle2, AlertTriangle, FileText } from "lucide-react";
+import { fetchSettings, updateSettings } from "../api";
 
 export default function Settings() {
   const [settings, setSettings] = useState({
-    name: "Default Medical Clinic",
+    businessName: "Default Medical Clinic",
     messageTemplate: "Hi {{patient_name}}, this is a reminder for your appointment on {{appointment_date}} at {{appointment_time}}.",
     timeZone: "America/New_York"
   });
@@ -12,12 +13,11 @@ export default function Settings() {
   const [message, setMessage] = useState(null);
 
   useEffect(() => {
-    fetch("/api/settings")
-      .then((res) => res.json())
+    fetchSettings()
       .then((data) => {
         if (data) {
           setSettings({
-            name: data.name || "Default Medical Clinic",
+            businessName: data.businessName || "Default Medical Clinic",
             messageTemplate: data.messageTemplate || "",
             timeZone: data.timeZone || "America/New_York"
           });
@@ -32,18 +32,10 @@ export default function Settings() {
     setMessage(null);
 
     try {
-      const res = await fetch("/api/settings", {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(settings)
-      });
-      if (res.ok) {
-        setMessage({ type: "success", text: "Settings and message template saved to MongoDB successfully!" });
-      } else {
-        setMessage({ type: "error", text: "Failed to save settings." });
-      }
+      await updateSettings(settings);
+      setMessage({ type: "success", text: "Settings and message template saved to MongoDB successfully!" });
     } catch (err) {
-      setMessage({ type: "error", text: "Network error saving settings." });
+      setMessage({ type: "error", text: err.message || "Failed to save settings." });
     } finally {
       setSaving(false);
     }
@@ -72,7 +64,7 @@ export default function Settings() {
           }`}
         >
           <span>{message.text}</span>
-          <button onClick={() => setMessage(null)} className="font-bold">Dismiss</button>
+          <button type="button" onClick={() => setMessage(null)} className="font-bold">Dismiss</button>
         </div>
       )}
 
@@ -83,8 +75,8 @@ export default function Settings() {
           </label>
           <input
             type="text"
-            value={settings.name}
-            onChange={(e) => setSettings({ ...settings, name: e.target.value })}
+            value={settings.businessName}
+            onChange={(e) => setSettings({ ...settings, businessName: e.target.value })}
             className="w-full px-4 py-2.5 rounded-xl bg-slate-50 border border-slate-300 text-xs font-bold text-slate-900 focus:outline-none focus:border-blue-500 focus:bg-white transition-all shadow-sm"
             required
           />
@@ -120,7 +112,8 @@ export default function Settings() {
           <p className="text-[11px] text-slate-500 mt-2">
             Available Placeholders: <code className="text-blue-700 bg-blue-50 px-1.5 py-0.5 rounded border border-blue-200">{"{{patient_name}}"}</code>,{" "}
             <code className="text-blue-700 bg-blue-50 px-1.5 py-0.5 rounded border border-blue-200">{"{{appointment_date}}"}</code>,{" "}
-            <code className="text-blue-700 bg-blue-50 px-1.5 py-0.5 rounded border border-blue-200">{"{{appointment_time}}"}</code>
+            <code className="text-blue-700 bg-blue-50 px-1.5 py-0.5 rounded border border-blue-200">{"{{appointment_time}}"}</code>,{" "}
+            <code className="text-blue-700 bg-blue-50 px-1.5 py-0.5 rounded border border-blue-200">{"{{business_name}}"}</code>
           </p>
         </div>
 

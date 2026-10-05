@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef, useCallback } from "react";
 import { BrowserRouter as Router, Routes, Route } from "react-router-dom";
 import Navbar from "./components/Navbar";
 import Sidebar from "./components/Sidebar";
@@ -13,74 +13,125 @@ import Confirmations from "./pages/Confirmations";
 import FailedRetry from "./pages/FailedRetry";
 import Settings from "./pages/Settings";
 
-export default function App() {
-  const [state, setState] = useState({
-    status: "idle",
-    mode: "dry_run",
-    total: 0,
-    processed: 0,
-    sent: 0,
-    failed: 0,
-    skipped: 0,
-    remaining: 0,
+import { getLatestRun, createRun, stopRun as apiStopRun, createRunEventSource } from "./api";
+
+// Map RunStatus → simple UI status words the existing components already understand
+function deriveUiStatus(run) {
+  if (!run) return "idle";
+  switch (run.status) {
+    case "QUEUED":   return "starting";
+    case "RUNNING":  return "running";
+    case "STOPPED":  return "stopping";
+    case "COMPLETED": return "completed";
+    case "FAILED":   return "failed";
+    case "CANCELLED": return "cancelled";
+    case "INTERRUPTED": return "failed";
+    default:         return "idle";
+  }
+}
+
+function buildState(run) {
+  if (!run) {
+    return {
+      status: "idle", mode: "DRY_RUN", total: 0, processed: 0,
+      sent: 0, failed: 0, skipped: 0, remaining: 0,
+      currentPatient: null, startedAt: null, completedAt: null,
+      error: null, runId: null, appointmentDate: null, logs: [],
+    };
+  }
+  const c = run.counts || {};
+  return {
+    status: deriveUiStatus(run),
+    mode: run.mode || "DRY_RUN",
+    total: c.total || 0,
+    processed: c.processed || 0,
+    sent: (c.sent || 0) + (c.dryRunVerified || 0),
+    failed: c.failed || 0,
+    skipped: c.skipped || 0,
+    remaining: c.remaining || 0,
     currentPatient: null,
-    startedAt: null,
-    completedAt: null,
-    error: null,
-    csvFile: "appointments.csv",
-    logs: []
-  });
+    startedAt: run.startedAt || run.queuedAt,
+    completedAt: run.finishedAt,
+    error: run.error,
+    runId: run.id,
+    appointmentDate: run.appointmentDate,
+  };
+}
 
-  // Connect to SSE for real-time live events
-  useEffect(() => {
-    let eventSource = new EventSource("/api/automation/events");
+export default function App() {
+  const [state, setState] = useState(buildState(null));
+  const esRef = useRef(null);
 
-    eventSource.onmessage = (e) => {
+  // Subscribe to SSE for a specific run
+  const subscribeToRun = useCallback((runId) => {
+    // Clean up any previous connection
+    if (esRef.current) { esRef.current.close(); esRef.current = null; }
+    if (!runId) return;
+
+    const es = createRunEventSource(runId);
+    esRef.current = es;
+
+    es.addEventListener("run", (e) => {
       try {
-        const data = JSON.parse(e.data);
-        if (data.type === "init" || data.type === "state_update") {
-          setState((prev) => ({ ...prev, ...data.state }));
-        } else if (data.type === "log") {
-          setState((prev) => ({
-            ...prev,
-            logs: [...prev.logs, data.log]
-          }));
-        }
-      } catch (err) {
-        console.error("SSE parse error:", err);
-      }
-    };
+        const run = JSON.parse(e.data);
+        setState((prev) => ({ ...prev, ...buildState(run) }));
+      } catch (err) { console.error("SSE run parse error:", err); }
+    });
 
-    return () => {
-      eventSource.close();
-    };
+    es.addEventListener("log", (e) => {
+      try {
+        const log = JSON.parse(e.data);
+        setState((prev) => ({
+          ...prev,
+          logs: [...prev.logs, {
+            id: log.id,
+            time: new Date(log.createdAt).toLocaleTimeString(),
+            patient: log.appointmentId ? log.message.split("]")[0]?.replace("[", "").trim() : "System",
+            action: log.event,
+            status: log.level.toLowerCase(),
+            message: log.message,
+          }],
+        }));
+      } catch (err) { console.error("SSE log parse error:", err); }
+    });
+
+    es.addEventListener("end", () => { es.close(); esRef.current = null; });
+    es.onerror = () => { es.close(); esRef.current = null; };
   }, []);
 
   // Fetch initial status on mount
   useEffect(() => {
-    fetch("/api/automation/status")
-      .then((res) => res.json())
-      .then((data) => {
-        if (data) setState(data);
+    getLatestRun()
+      .then((run) => {
+        const s = buildState(run);
+        setState((prev) => ({ ...prev, ...s, logs: prev.logs }));
+        // If the run is still active, subscribe to its SSE stream
+        if (["QUEUED", "RUNNING"].includes(run.status)) {
+          subscribeToRun(run.id);
+        }
       })
-      .catch((err) => console.error("Error fetching status:", err));
-  }, []);
+      .catch(() => { /* no runs yet, stay idle */ });
+
+    return () => { if (esRef.current) esRef.current.close(); };
+  }, [subscribeToRun]);
 
   const handleStart = async (date = null) => {
     try {
-      await fetch("/api/automation/start", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ mode: state.mode, date })
-      });
+      const appointmentDate = date || state.appointmentDate || new Date().toISOString().split("T")[0];
+      const run = await createRun(appointmentDate, state.mode);
+      setState((prev) => ({ ...prev, ...buildState(run), logs: [] }));
+      subscribeToRun(run.id);
     } catch (err) {
       console.error("Error starting automation:", err);
+      setState((prev) => ({ ...prev, error: err.message }));
     }
   };
 
   const handleStop = async () => {
     try {
-      await fetch("/api/automation/stop", { method: "POST" });
+      if (!state.runId) return;
+      const run = await apiStopRun(state.runId);
+      setState((prev) => ({ ...prev, ...buildState(run) }));
     } catch (err) {
       console.error("Error stopping automation:", err);
     }

@@ -29,15 +29,19 @@ export default function Dashboard({ state, onStart, onStop, onModeChange }) {
     formData.append("file", file);
 
     try {
-      const res = await fetch("/api/import/csv", {
+      const res = await fetch("/api/imports", {
         method: "POST",
         body: formData
       });
       const data = await res.json();
       if (res.ok) {
-        setImportSummary(data.summary);
+        setImportSummary({
+          imported: (data.counts?.created || 0) + (data.counts?.updated || 0) + (data.counts?.reactivated || 0),
+          duplicates: (data.counts?.unchanged || 0),
+          invalid: (data.counts?.invalid || 0),
+        });
       } else {
-        setError(data.error || "Import failed");
+        setError(data.detail || data.error || "Import failed");
       }
     } catch (err) {
       setError("Network error uploading CSV");

@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { Users, History, Phone, Clock, CheckCircle2, XCircle, AlertTriangle } from "lucide-react";
+import { fetchPatients, fetchPatientAppointments } from "../api";
 
 export default function Patients() {
   const [patients, setPatients] = useState([]);
@@ -7,11 +8,14 @@ export default function Patients() {
   const [selectedPatient, setSelectedPatient] = useState(null);
   const [history, setHistory] = useState([]);
   const [historyLoading, setHistoryLoading] = useState(false);
+  const [totalCount, setTotalCount] = useState(0);
 
   useEffect(() => {
-    fetch("/api/patients")
-      .then((res) => res.json())
-      .then((data) => setPatients(data || []))
+    fetchPatients("", 50, 0)
+      .then((data) => {
+        setPatients(data.items || []);
+        setTotalCount(data.total || 0);
+      })
       .catch((err) => console.error("Error fetching patients:", err))
       .finally(() => setLoading(false));
   }, []);
@@ -20,8 +24,7 @@ export default function Patients() {
     setSelectedPatient(patient);
     setHistoryLoading(true);
     try {
-      const res = await fetch(`/api/patients/${patient._id}/history`);
-      const data = await res.json();
+      const data = await fetchPatientAppointments(patient.id);
       setHistory(data || []);
     } catch (err) {
       console.error("Error fetching patient history:", err);
@@ -42,7 +45,7 @@ export default function Patients() {
             <p className="text-xs text-slate-500">Complete historical records for all patient reminders</p>
           </div>
         </div>
-        <span className="text-xs font-mono text-slate-500">{patients.length} Total Patients</span>
+        <span className="text-xs font-mono text-slate-500">{totalCount} Total Patients</span>
       </div>
 
       <div className="bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-sm">
@@ -71,7 +74,7 @@ export default function Patients() {
                 </tr>
               ) : (
                 patients.map((p) => (
-                  <tr key={p._id} className="hover:bg-slate-50 transition-colors">
+                  <tr key={p.id} className="hover:bg-slate-50 transition-colors">
                     <td className="py-3 px-4 font-bold text-slate-900">{p.fullName}</td>
                     <td className="py-3 px-4 font-mono text-slate-700">{p.phone}</td>
                     <td className="py-3 px-4 text-slate-500 font-mono">
@@ -115,40 +118,38 @@ export default function Patients() {
 
             <div className="space-y-4 max-h-96 overflow-y-auto pr-1">
               <h4 className="text-xs font-semibold text-slate-500 uppercase tracking-wider">
-                Message Attempt Audit Log
+                Appointment Reminder Audit Log
               </h4>
 
               {historyLoading ? (
-                <p className="text-xs text-slate-500 py-4 text-center">Loading attempt history...</p>
+                <p className="text-xs text-slate-500 py-4 text-center">Loading appointment history...</p>
               ) : history.length === 0 ? (
-                <p className="text-xs text-slate-500 py-4 text-center">No message attempts recorded for this patient.</p>
+                <p className="text-xs text-slate-500 py-4 text-center">No appointments recorded for this patient.</p>
               ) : (
                 history.map((att) => (
-                  <div key={att._id} className="p-4 rounded-xl bg-slate-50 border border-slate-200 space-y-2 text-xs shadow-sm">
+                  <div key={att.id} className="p-4 rounded-xl bg-slate-50 border border-slate-200 space-y-2 text-xs shadow-sm">
                     <div className="flex items-center justify-between">
-                      <span className="font-bold text-blue-700">Attempt #{att.attemptNumber}</span>
+                      <span className="font-bold text-blue-700">{att.appointmentDate} at {att.appointmentTime}</span>
                       <span className="font-mono text-[10px] text-slate-500">
-                        {new Date(att.createdAt).toLocaleString()}
+                        {new Date(att.updatedAt).toLocaleString()}
                       </span>
                     </div>
-
-                    <p className="text-slate-800 font-mono text-[11px] bg-white p-2.5 rounded-lg border border-slate-200">
-                      {att.message}
-                    </p>
 
                     <div className="flex items-center justify-between pt-1">
                       <span
                         className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold ${
-                          att.status === "CONFIRMED" || att.status === "SENT"
+                          att.status === "SENT" || att.status === "CONFIRMED"
                             ? "bg-emerald-50 text-emerald-700 border border-emerald-200"
-                            : "bg-rose-50 text-rose-700 border border-rose-200"
+                            : att.status === "FAILED" || att.status === "NEEDS_REVIEW"
+                            ? "bg-rose-50 text-rose-700 border border-rose-200"
+                            : "bg-amber-50 text-amber-700 border border-amber-200"
                         }`}
                       >
                         {att.status}
                       </span>
 
-                      {att.failureReason && (
-                        <span className="text-rose-600 font-mono text-[10px]">{att.failureReason}</span>
+                      {att.statusReason && (
+                        <span className="text-rose-600 font-mono text-[10px]">{att.statusReason}</span>
                       )}
                     </div>
                   </div>

@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { Calendar as CalendarIcon, CheckSquare, Square, Play, RefreshCw, CheckCircle2, XCircle, AlertTriangle, Clock } from "lucide-react";
+import { fetchDates, fetchAppointments, setExcluded } from "../api";
 
 export default function Appointments({ onStartWithDate }) {
   const [dates, setDates] = useState([]);
@@ -9,8 +10,7 @@ export default function Appointments({ onStartWithDate }) {
 
   // Fetch available dates on mount
   useEffect(() => {
-    fetch("/api/appointments/dates")
-      .then((res) => res.json())
+    fetchDates()
       .then((data) => {
         if (data.dates && data.dates.length > 0) {
           setDates(data.dates);
@@ -24,8 +24,7 @@ export default function Appointments({ onStartWithDate }) {
   useEffect(() => {
     if (!selectedDate) return;
     setLoading(true);
-    fetch(`/api/appointments?date=${selectedDate}`)
-      .then((res) => res.json())
+    fetchAppointments(selectedDate)
       .then((data) => {
         const sorted = (data.appointments || []).sort(
           (a, b) => parseTimeToMinutes(a.appointmentTime) - parseTimeToMinutes(b.appointmentTime)
@@ -48,42 +47,32 @@ export default function Appointments({ onStartWithDate }) {
     return hours * 60 + minutes;
   }
 
-
-  // Toggle selection for single appointment
-  const handleToggleSingle = async (id, currentVal) => {
-    const newVal = !currentVal;
+  // Toggle exclusion for single appointment (excluded = !selected)
+  const handleToggleSingle = async (id, currentExcluded) => {
+    const newExcluded = !currentExcluded;
     setAppointments((prev) =>
-      prev.map((a) => (a.id === id ? { ...a, reminderSelected: newVal } : a))
+      prev.map((a) => (a.id === id ? { ...a, excluded: newExcluded } : a))
     );
-
     try {
-      await fetch("/api/appointments/selection", {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ appointmentIds: [id], selected: newVal })
-      });
+      await setExcluded([id], newExcluded);
     } catch (err) {
-      console.error("Error toggling selection:", err);
+      console.error("Error toggling exclusion:", err);
     }
   };
 
-  // Select / Deselect All
+  // Select All = set excluded=false for all, Clear All = set excluded=true for all
   const handleToggleAll = async (selectAll) => {
     const ids = appointments.map((a) => a.id);
-    setAppointments((prev) => prev.map((a) => ({ ...a, reminderSelected: selectAll })));
-
+    const excluded = !selectAll;
+    setAppointments((prev) => prev.map((a) => ({ ...a, excluded })));
     try {
-      await fetch("/api/appointments/selection", {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ appointmentIds: ids, selected: selectAll })
-      });
+      await setExcluded(ids, excluded);
     } catch (err) {
       console.error("Error toggling all:", err);
     }
   };
 
-  const selectedCount = appointments.filter((a) => a.reminderSelected).length;
+  const selectedCount = appointments.filter((a) => !a.excluded).length;
 
   return (
     <div className="space-y-6">
@@ -160,7 +149,7 @@ export default function Appointments({ onStartWithDate }) {
                 <th className="py-3 px-4">Patient</th>
                 <th className="py-3 px-4">Time</th>
                 <th className="py-3 px-4">Provider</th>
-                <th className="py-3 px-4">Masked Phone</th>
+                <th className="py-3 px-4">Phone</th>
                 <th className="py-3 px-4">Reminder Status</th>
               </tr>
             </thead>
@@ -183,28 +172,30 @@ export default function Appointments({ onStartWithDate }) {
                     <td className="py-3 px-4 text-center">
                       <input
                         type="checkbox"
-                        checked={a.reminderSelected}
-                        onChange={() => handleToggleSingle(a.id, a.reminderSelected)}
+                        checked={!a.excluded}
+                        onChange={() => handleToggleSingle(a.id, a.excluded)}
                         className="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500 cursor-pointer"
                       />
                     </td>
                     <td className="py-3 px-4 font-bold text-slate-900">{a.patientName}</td>
                     <td className="py-3 px-4 font-mono text-blue-700 font-semibold">{a.appointmentTime}</td>
                     <td className="py-3 px-4 text-slate-600">{a.provider}</td>
-                    <td className="py-3 px-4 font-mono text-slate-700">{a.maskedPhone}</td>
+                    <td className="py-3 px-4 font-mono text-slate-700">{a.phone}</td>
                     <td className="py-3 px-4">
                       <span
                         className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-bold ${
-                          a.reminderStatus === "CONFIRMED" || a.reminderStatus === "SENT"
+                          a.status === "SENT"
                             ? "bg-emerald-50 text-emerald-700 border border-emerald-200"
-                            : a.reminderStatus === "FAILED" || a.reminderStatus === "NOT_CONFIRMED"
+                            : a.status === "FAILED"
                             ? "bg-rose-50 text-rose-700 border border-rose-200"
-                            : a.reminderStatus === "SKIPPED"
+                            : a.status === "SKIPPED"
                             ? "bg-amber-50 text-amber-700 border border-amber-200"
+                            : a.status === "NEEDS_REVIEW"
+                            ? "bg-orange-50 text-orange-700 border border-orange-200"
                             : "bg-blue-50 text-blue-700 border border-blue-200"
                         }`}
                       >
-                        {a.reminderStatus}
+                        {a.status}
                       </span>
                     </td>
                   </tr>

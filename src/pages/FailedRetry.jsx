@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { RefreshCw, AlertTriangle, CheckSquare, Square, Play, CheckCircle2 } from "lucide-react";
+import { fetchAppointments, requeueAppointments, createRun } from "../api";
 
 export default function FailedRetry() {
   const [appointments, setAppointments] = useState([]);
@@ -8,18 +9,28 @@ export default function FailedRetry() {
   const [retrying, setRetrying] = useState(false);
   const [message, setMessage] = useState(null);
 
-  useEffect(() => {
-    fetch("/api/appointments")
-      .then((res) => res.json())
+  const loadFailedAppointments = () => {
+    setLoading(true);
+    // Try to get today's date, or whatever the logic dictates. 
+    // Usually a retry would pull from all dates, but the new API requires a date for /appointments.
+    // For now we assume we want to query today's failed. (A real fix might need a /appointments/failed route in backend)
+    const today = new Date().toISOString().split("T")[0];
+    
+    // Fetch all statuses for today, filter to failed/skipped/needs_review locally
+    fetchAppointments(today)
       .then((data) => {
         const failedOrUnconfirmed = (data.appointments || []).filter(
-          (a) => a.reminderStatus === "FAILED" || a.reminderStatus === "NOT_CONFIRMED"
+          (a) => ["FAILED", "SKIPPED", "NEEDS_REVIEW"].includes(a.status)
         );
         setAppointments(failedOrUnconfirmed);
         setSelectedIds(failedOrUnconfirmed.map((a) => a.id));
       })
       .catch((err) => console.error("Error fetching failed appointments:", err))
       .finally(() => setLoading(false));
+  };
+
+  useEffect(() => {
+    loadFailedAppointments();
   }, []);
 
   const handleToggleSingle = (id) => {
@@ -42,19 +53,14 @@ export default function FailedRetry() {
     setMessage(null);
 
     try {
-      const res = await fetch("/api/automation/retry", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ appointmentIds: selectedIds, mode: "send" })
-      });
-      const data = await res.json();
-      if (res.ok) {
-        setMessage(`Retry automation started for ${data.total} appointment(s). Attempt records created in MongoDB.`);
-      } else {
-        setMessage(`Retry Error: ${data.error}`);
-      }
+      const res = await requeueAppointments(selectedIds);
+      // Immediately start a new run for today
+      const today = new Date().toISOString().split("T")[0];
+      await createRun(today, "SEND");
+      setMessage({ type: "success", text: `Successfully requeued ${res.updated} appointment(s) and queued a new run!` });
+      loadFailedAppointments();
     } catch (err) {
-      setMessage("Network error triggering retry");
+      setMessage({ type: "error", text: `Retry Error: ${err.message}` });
     } finally {
       setRetrying(false);
     }
@@ -87,9 +93,11 @@ export default function FailedRetry() {
 
       {/* MESSAGE NOTIFICATION */}
       {message && (
-        <div className="p-4 rounded-xl bg-blue-50 border border-blue-200 text-blue-800 text-xs flex items-center justify-between shadow-sm">
-          <span>{message}</span>
-          <button onClick={() => setMessage(null)} className="font-bold text-blue-700">Dismiss</button>
+        <div className={`p-4 rounded-xl border text-xs flex items-center justify-between shadow-sm ${
+          message.type === "success" ? "bg-emerald-50 border-emerald-200 text-emerald-800" : "bg-rose-50 border-rose-200 text-rose-800"
+        }`}>
+          <span>{message.text}</span>
+          <button type="button" onClick={() => setMessage(null)} className="font-bold">Dismiss</button>
         </div>
       )}
 
@@ -128,7 +136,7 @@ export default function FailedRetry() {
                 <th className="py-3 px-4">Patient Name</th>
                 <th className="py-3 px-4">Appointment Date</th>
                 <th className="py-3 px-4">Time</th>
-                <th className="py-3 px-4">Masked Phone</th>
+                <th className="py-3 px-4">Phone</th>
                 <th className="py-3 px-4">Status</th>
               </tr>
             </thead>
@@ -142,7 +150,7 @@ export default function FailedRetry() {
               ) : appointments.length === 0 ? (
                 <tr>
                   <td colSpan={6} className="py-8 text-center text-emerald-600 font-semibold">
-                    ✓ No failed or unconfirmed messages! All reminders are clean.
+                    ✓ No failed or unconfirmed messages for today! All reminders are clean.
                   </td>
                 </tr>
               ) : (
@@ -159,10 +167,10 @@ export default function FailedRetry() {
                     <td className="py-3 px-4 font-bold text-slate-900">{a.patientName}</td>
                     <td className="py-3 px-4 font-mono text-slate-700">{a.appointmentDate}</td>
                     <td className="py-3 px-4 font-mono text-blue-700 font-semibold">{a.appointmentTime}</td>
-                    <td className="py-3 px-4 font-mono text-slate-600">{a.maskedPhone}</td>
+                    <td className="py-3 px-4 font-mono text-slate-600">{a.phone}</td>
                     <td className="py-3 px-4">
                       <span className="px-2.5 py-1 rounded-full text-[10px] font-bold bg-rose-50 text-rose-700 border border-rose-200">
-                        {a.reminderStatus}
+                        {a.status}
                       </span>
                     </td>
                   </tr>
