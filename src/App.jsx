@@ -18,10 +18,11 @@ import { getLatestRun, createRun, stopRun as apiStopRun, createRunEventSource } 
 // Map RunStatus → simple UI status words the existing components already understand
 function deriveUiStatus(run) {
   if (!run) return "idle";
+  if (run.status === "RUNNING" && (run.stopRequested || run.stop_requested)) return "stopping";
   switch (run.status) {
     case "QUEUED":   return "starting";
     case "RUNNING":  return "running";
-    case "STOPPED":  return "stopping";
+    case "STOPPED":  return "stopped";
     case "COMPLETED": return "completed";
     case "FAILED":   return "failed";
     case "CANCELLED": return "cancelled";
